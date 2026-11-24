@@ -30,22 +30,41 @@
     r.timestamp = g.timestamp; r.axes = g.axes; r.buttons = g.buttons;
     return r;
   }
+  // Input mode: 'auto' (gamepad if one is connected, otherwise Quest controllers),
+  // 'pad' (gamepad only, Quest controllers ignored), 'touch' (Quest controllers only).
+  const MODES = ['auto', 'pad', 'touch'];
+  let inputMode = 'auto';
+  try { const m = localStorage.getItem('ursimvr.input'); if (MODES.includes(m)) inputMode = m; } catch (_) {}
+  let realPadName = '';
+  const isXrPad = g => g.mapping === 'xr-standard' || /oculus|meta quest|touch|openxr|quest/i.test(g.id || '');
   function getGamepads() {
     const src = nativeGet() || [];
     const out = [];
     let hasReal = false;
+    realPadName = '';
     for (let i = 0; i < src.length; i++) {
       const g = src[i];
-      if (!g) { out.push(null); continue; }
-      if (g.mapping === 'standard' && g.connected) { hasReal = true; out.push(supported(g.id) ? g : relabel(g)); }
-      else out.push(g);
+      // Quest controllers are read separately (pollTouch); in 'touch' mode ordinary pads are hidden.
+      if (!g || !g.connected || isXrPad(g) || inputMode === 'touch') { out.push(null); continue; }
+      // Any ordinary gamepad counts (Bluetooth pad on the Quest, or a pad on the PC).
+      hasReal = true;
+      if (!realPadName) realPadName = g.id.replace(/\(.*\)/, '').trim() || 'gamepad';
+      out.push(supported(g.id) && g.mapping === 'standard' ? g : relabel(g));
     }
-    if (virtLive && !hasReal) {
+    const useTouch = virtLive && (inputMode === 'touch' || (inputMode === 'auto' && !hasReal));
+    if (useTouch) {
       virt.index = Math.max(3, out.length);
       while (out.length < virt.index) out.push(null);
       out[virt.index] = virt;
     }
+    activeInput = hasReal && inputMode !== 'touch' ? 'pad' : (useTouch ? 'touch' : 'none');
     return out;
+  }
+  let activeInput = 'none';
+  function inputStatus() {
+    if (activeInput === 'pad') return 'Управление: геймпад ' + realPadName.slice(0, 28);
+    if (activeInput === 'touch') return inputMode === 'touch' ? 'Управление: контроллеры Quest' : 'Контроллеры Quest · геймпад не найден (нажми на нём кнопку)';
+    return inputMode === 'pad' ? 'Геймпад не найден: нажми на нём любую кнопку' : '';
   }
   try { Object.defineProperty(navigator, 'getGamepads', { value: getGamepads, configurable: true }); }
   catch (e) { navigator.getGamepads = getGamepads; }
@@ -129,7 +148,8 @@
       const red = h.scoreRed.textContent || '0', blue = h.scoreBlue.textContent || '0';
       const clock = h.clock.textContent || '', label = h.clockLabel.textContent || '';
       const st = app.state;
-      const key = [st, red, blue, clock, label, virtLive, lastErr].join('|');
+      const status = inputStatus();
+      const key = [st, red, blue, clock, label, status, lastErr].join('|');
       if (key === lastKey) return;
       lastKey = key;
       ctx.clearRect(0, 0, 1024, 300);
@@ -145,7 +165,11 @@
       if (st === 'paused') msg = 'ПАУЗА · нажми снова Guide / оба стика — продолжить';
       else if (st === 'results') msg = 'МАТЧ ОКОНЧЕН · оба триггера — сыграть ещё';
       else if (st !== 'playing') msg = 'Оба триггера — старт практики';
+      if (!msg && status && activeInput !== 'pad' && st === 'playing') msg = status;
       if (lastErr) msg = 'Ошибка: ' + lastErr;
+      if (activeInput === 'pad') {
+        ctx.fillStyle = '#81c784'; ctx.font = '26px system-ui, sans-serif'; ctx.fillText(status, 512, 196);
+      }
       if (msg) {
         roundRect(60, 226, 904, 64, 18, 'rgba(255,193,7,0.92)');
         ctx.fillStyle = '#111'; ctx.font = 'bold 34px system-ui, sans-serif'; ctx.fillText(msg, 512, 259);
@@ -268,6 +292,25 @@
     btn.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:99999;padding:12px 20px;border:0;border-radius:12px;'
       + 'font:600 16px system-ui,sans-serif;background:#ffb300;color:#111;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4)';
     document.body.appendChild(btn);
+
+    // Input mode switch (saved between visits)
+    const modeBtn = document.createElement('button');
+    const modeNames = { auto: 'Управление: авто', pad: 'Управление: только геймпад', touch: 'Управление: контроллеры Quest' };
+    modeBtn.style.cssText = 'position:fixed;right:18px;bottom:76px;z-index:99999;padding:10px 16px;border:0;border-radius:12px;'
+      + 'font:600 14px system-ui,sans-serif;background:#eceff1;color:#111;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4)';
+    const showMode = () => { modeBtn.textContent = modeNames[inputMode]; modeBtn.title = 'Нажми, чтобы сменить. Геймпад: подключи по Bluetooth и нажми на нём любую кнопку.'; };
+    modeBtn.addEventListener('click', () => {
+      inputMode = MODES[(MODES.indexOf(inputMode) + 1) % MODES.length];
+      try { localStorage.setItem('ursimvr.input', inputMode); } catch (_) {}
+      showMode(); lastKey = '';
+    });
+    showMode();
+    document.body.appendChild(modeBtn);
+    // Show which gamepad is seen, on the page too
+    setInterval(() => {
+      navigator.getGamepads();
+      if (!xrSession) btn.title = inputStatus() || 'Геймпад не подключён: в VR будут работать контроллеры Quest';
+    }, 1000);
     const toast = m => { try { app.hud.toast(m); } catch (_) {} console.log(TAG, m); };
     if (!navigator.xr) {
       btn.textContent = 'VR недоступен'; btn.disabled = true; btn.style.opacity = '0.5';
@@ -282,7 +325,7 @@
         catch (e) { console.error(TAG, e); toast('Не удалось войти в VR: ' + (e && e.message || e)); }
       });
     }
-    window.__ursimVR = { dolly, xrCam, panel, align, drawPanel, start: startVR };
+    window.__ursimVR = { dolly, xrCam, panel, align, drawPanel, start: startVR, inputStatus, getMode: () => inputMode };
     console.log(TAG, 'ready');
   });
 })();
