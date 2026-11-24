@@ -1,0 +1,10 @@
+{
+  "name": "UrSim VR — FTC BIOBUZZ",
+  "short_name": "UrSim VR",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#090b0f",
+  "theme_color": "#090b0f",
+  "icons": [{ "src": "icon.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" }]
+}
