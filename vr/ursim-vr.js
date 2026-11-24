@@ -119,6 +119,7 @@
     }
 
     let lastKey = '';
+    let lastErr = '';
     function roundRect(x, y, w, h, r, fill) {
       ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
       ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
@@ -128,7 +129,7 @@
       const red = h.scoreRed.textContent || '0', blue = h.scoreBlue.textContent || '0';
       const clock = h.clock.textContent || '', label = h.clockLabel.textContent || '';
       const st = app.state;
-      const key = [st, red, blue, clock, label, virtLive].join('|');
+      const key = [st, red, blue, clock, label, virtLive, lastErr].join('|');
       if (key === lastKey) return;
       lastKey = key;
       ctx.clearRect(0, 0, 1024, 300);
@@ -144,6 +145,7 @@
       if (st === 'paused') msg = 'ПАУЗА · нажми снова Guide / оба стика — продолжить';
       else if (st === 'results') msg = 'МАТЧ ОКОНЧЕН · оба триггера — сыграть ещё';
       else if (st !== 'playing') msg = 'Оба триггера — старт практики';
+      if (lastErr) msg = 'Ошибка: ' + lastErr;
       if (msg) {
         roundRect(60, 226, 904, 64, 18, 'rgba(255,193,7,0.92)');
         ctx.fillStyle = '#111'; ctx.font = 'bold 34px system-ui, sans-serif'; ctx.fillText(msg, 512, 259);
@@ -182,8 +184,9 @@
     const origRender = app.effects.render.bind(app.effects);
     app.effects.render = function (dt) {
       if (renderer.xr.isPresenting) {
+        // Note: three.js has already bound the headset's framebuffer for this frame;
+        // do not touch the render target here or the image goes to the page instead of the headset.
         drawPanel();
-        renderer.setRenderTarget(null);
         renderer.render(app.scene, xrCam);
       } else origRender(dt);
     };
@@ -217,7 +220,13 @@
       vrButtons();
       if (app.rig.alliance !== lastAlliance) needAlign = true;
       if (needAlign && align(frame)) needAlign = false;
-      app.tick(Math.min(0.1, Math.max(0, dt)));
+      try { app.tick(Math.min(0.1, Math.max(0, dt))); }
+      catch (e) {
+        // Never leave the headset black: draw the scene anyway and show the error on the scoreboard.
+        if (!lastErr) console.error(TAG, e);
+        lastErr = String((e && e.message) || e).slice(0, 60);
+        try { drawPanel(); renderer.render(app.scene, xrCam); } catch (_) {}
+      }
     }
 
     async function startVR() {
